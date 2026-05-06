@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jep-langgraph-adapter"
+version = "0.1.0"
+description = "JEP runtime adapter for LangGraph: replayable delegation and verifiable AI accountability semantics."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "JEP" }]
+license = { text = "MIT" }
+keywords = ["jep", "langgraph", "accountability", "replay", "agent"]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+langgraph = ["langgraph>=0.2"]
+
+[project.scripts]
+jep-langgraph = "jep_langgraph_adapter.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
