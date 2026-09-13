@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import contextvars
 import uuid
+from copy import deepcopy
+from threading import RLock
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
 from .canonicalization import canonical_hash
 from .events import JEPEvent, JEPEventType
-
-_current_delegation_hash: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "jep_current_delegation_hash", default=None
-)
 
 
 @dataclass
@@ -23,6 +21,13 @@ class JEPExecutionTracer:
     default_agent_id: str = "langgraph-agent"
     default_authority_scope: Mapping[str, Any] = field(default_factory=dict)
     events: List[JEPEvent] = field(default_factory=list)
+    _lock: Any = field(default_factory=RLock, repr=False)
+    _delegation_hash: Any = field(
+        default_factory=lambda: contextvars.ContextVar(
+            "jep_delegation_hash", default=None
+        ),
+        repr=False,
+    )
 
     @property
     def previous_event_hash(self) -> Optional[str]:
@@ -62,7 +67,7 @@ class JEPExecutionTracer:
         authority_scope: Optional[Mapping[str, Any]] = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> JEPEvent:
-        parent_hash = _current_delegation_hash.get() or self.previous_event_hash
+        parent_hash = self._delegation_hash.get() or self.previous_event_hash
         return self._append(
             JEPEventType.DELEGATION,
             node_name=node_name,
@@ -132,11 +137,11 @@ class JEPExecutionTracer:
 
         class _DelegationContext:
             def __enter__(self_inner):
-                self_inner.token = _current_delegation_hash.set(delegation_event.hash())
+                self_inner.token = self._delegation_hash.set(delegation_event.hash())
                 return delegation_event
 
             def __exit__(self_inner, exc_type, exc, tb):
-                _current_delegation_hash.reset(self_inner.token)
+                self._delegation_hash.reset(self_inner.token)
                 return False
 
         return _DelegationContext()
@@ -153,20 +158,27 @@ class JEPExecutionTracer:
         delegation_parent_hash: Optional[str] = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> JEPEvent:
-        event = JEPEvent(
-            event_type=event_type,
-            event_id=f"{self.session_id}:{len(self.events)}",
-            session_id=self.session_id,
-            sequence=len(self.events),
-            node_name=node_name,
-            agent_id=agent_id or self.default_agent_id,
-            tool_name=tool_name,
-            state_transition=dict(state_transition),
-            authority_scope=dict(authority_scope or self.default_authority_scope),
-            previous_event_hash=self.previous_event_hash,
-            delegation_parent_hash=delegation_parent_hash,
-            metadata=dict(metadata or {}),
-        )
-        event = JEPEvent.from_mapping(event.payload(include_hash=True))
-        self.events.append(event)
-        return event
+        with self._lock:
+            event = JEPEvent(
+                event_type=event_type,
+                event_id=f"{self.session_id}:{len(self.events)}",
+                session_id=self.session_id,
+                sequence=len(self.events),
+                node_name=node_name,
+                agent_id=agent_id or self.default_agent_id,
+                tool_name=tool_name,
+                state_transition=deepcopy(dict(state_transition)),
+                authority_scope=deepcopy(
+                    dict(
+                        authority_scope
+                        if authority_scope is not None
+                        else self.default_authority_scope
+                    )
+                ),
+                previous_event_hash=self.previous_event_hash,
+                delegation_parent_hash=delegation_parent_hash,
+                metadata=deepcopy(dict(metadata or {})),
+            )
+            event = JEPEvent.from_mapping(event.payload(include_hash=True))
+            self.events.append(event)
+            return event

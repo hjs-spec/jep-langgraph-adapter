@@ -68,3 +68,7 @@ The replay command validates deterministic event hashes, sequence numbers, and `
 - `examples/multi_step_graph.py`: multi-step graph execution.
 - `examples/sub_agent_delegation.py`: sub-agent delegation chain.
 - `examples/tool_invocation_replay.py`: tool invocation verification and replay.
+
+## Runtime and verification notes
+
+See [HARDENING.md](HARDENING.md) for supported behavior, regression checks, and compatibility boundaries.
