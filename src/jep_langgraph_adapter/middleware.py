@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import inspect
+import asyncio
+from copy import deepcopy
 from functools import wraps
 from typing import Any, Callable, Mapping, Optional
 
@@ -38,14 +40,19 @@ class JEPNodeMiddleware:
     ) -> Callable[..., Any]:
         """Return a wrapped node callable that records judgment/termination/verification events."""
 
-        resolved_node_name = node_name or getattr(node, "__name__", node.__class__.__name__)
+        resolved_node_name = node_name or getattr(
+            node, "__name__", node.__class__.__name__
+        )
         resolved_agent_id = agent_id or self.agent_id
-        resolved_scope = dict(authority_scope or self.authority_scope)
+        resolved_scope = dict(
+            authority_scope if authority_scope is not None else self.authority_scope
+        )
 
         if inspect.iscoroutinefunction(node):
 
             @wraps(node)
             async def async_wrapper(state: Any, *args: Any, **kwargs: Any) -> Any:
+                input_snapshot = deepcopy(state)
                 delegation_event = self._maybe_record_delegation(
                     is_delegation=is_delegation,
                     delegated_to=delegated_to,
@@ -55,30 +62,69 @@ class JEPNodeMiddleware:
                     state=state,
                     authority_scope=resolved_scope,
                 )
-                context = self.tracer.delegation_context(delegation_event) if delegation_event else _NullContext()
+                context = (
+                    self.tracer.delegation_context(delegation_event)
+                    if delegation_event
+                    else _NullContext()
+                )
                 with context:
                     self.tracer.record_judgment(
                         node_name=resolved_node_name,
                         agent_id=resolved_agent_id,
-                        input_state=state,
+                        input_state=input_snapshot,
                         authority_scope=resolved_scope,
                         metadata={"callable": repr(node)},
                     )
-                    result = await node(state, *args, **kwargs)
+                    try:
+                        result = await node(state, *args, **kwargs)
+                    except BaseException as exc:
+                        self._record_failure(
+                            resolved_node_name,
+                            resolved_agent_id,
+                            input_snapshot,
+                            resolved_scope,
+                            exc,
+                        )
+                        raise
                     self._record_completion(
                         node_name=resolved_node_name,
                         agent_id=resolved_agent_id,
                         tool_name=tool_name,
-                        input_state=state,
+                        input_state=input_snapshot,
                         output_state=result,
                         authority_scope=resolved_scope,
                     )
+                    if self.verifier is not None:
+                        try:
+                            verified = self.verifier(result)
+                            if inspect.isawaitable(verified):
+                                verified = await verified
+                            self._record_verdict(
+                                resolved_node_name,
+                                resolved_agent_id,
+                                tool_name,
+                                result,
+                                resolved_scope,
+                                verified,
+                            )
+                        except BaseException as exc:
+                            self._record_verdict(
+                                resolved_node_name,
+                                resolved_agent_id,
+                                tool_name,
+                                result,
+                                resolved_scope,
+                                False,
+                                exc,
+                            )
+                            raise
                     return result
 
             return async_wrapper
 
         @wraps(node)
         def wrapper(state: Any, *args: Any, **kwargs: Any) -> Any:
+            input_snapshot = deepcopy(state)
             delegation_event = self._maybe_record_delegation(
                 is_delegation=is_delegation,
                 delegated_to=delegated_to,
@@ -88,24 +134,64 @@ class JEPNodeMiddleware:
                 state=state,
                 authority_scope=resolved_scope,
             )
-            context = self.tracer.delegation_context(delegation_event) if delegation_event else _NullContext()
+            context = (
+                self.tracer.delegation_context(delegation_event)
+                if delegation_event
+                else _NullContext()
+            )
             with context:
                 self.tracer.record_judgment(
                     node_name=resolved_node_name,
                     agent_id=resolved_agent_id,
-                    input_state=state,
+                    input_state=input_snapshot,
                     authority_scope=resolved_scope,
                     metadata={"callable": repr(node)},
                 )
-                result = node(state, *args, **kwargs)
+                try:
+                    result = node(state, *args, **kwargs)
+                except BaseException as exc:
+                    self._record_failure(
+                        resolved_node_name,
+                        resolved_agent_id,
+                        input_snapshot,
+                        resolved_scope,
+                        exc,
+                    )
+                    raise
                 self._record_completion(
                     node_name=resolved_node_name,
                     agent_id=resolved_agent_id,
                     tool_name=tool_name,
-                    input_state=state,
+                    input_state=input_snapshot,
                     output_state=result,
                     authority_scope=resolved_scope,
                 )
+                if self.verifier is not None:
+                    try:
+                        verified = self.verifier(result)
+                        if inspect.isawaitable(verified):
+                            if inspect.iscoroutine(verified):
+                                verified.close()
+                            raise TypeError("async verifiers require an async node")
+                        self._record_verdict(
+                            resolved_node_name,
+                            resolved_agent_id,
+                            tool_name,
+                            result,
+                            resolved_scope,
+                            verified,
+                        )
+                    except BaseException as exc:
+                        self._record_verdict(
+                            resolved_node_name,
+                            resolved_agent_id,
+                            tool_name,
+                            result,
+                            resolved_scope,
+                            False,
+                            exc,
+                        )
+                        raise
                 return result
 
         return wrapper
@@ -153,17 +239,47 @@ class JEPNodeMiddleware:
             input_state=input_state,
             output_state=output_state,
             authority_scope=authority_scope,
+            metadata={
+                "status": "succeeded",
+                "verification_status": (
+                    "pending" if self.verifier is not None else "unchecked"
+                ),
+            },
         )
-        if tool_name or self.verifier:
-            verified = bool(self.verifier(output_state)) if self.verifier else True
-            self.tracer.record_verification(
-                node_name=node_name,
-                agent_id=agent_id,
-                tool_name=tool_name,
-                state=output_state,
-                verified=verified,
-                authority_scope=authority_scope,
-            )
+
+    def _record_failure(self, node_name, agent_id, input_state, scope, exc):
+        self.tracer.record_termination(
+            node_name=node_name,
+            agent_id=agent_id,
+            input_state=input_state,
+            output_state=None,
+            authority_scope=scope,
+            metadata={
+                "status": (
+                    "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+                ),
+                "error_type": type(exc).__name__,
+            },
+        )
+
+    def _record_verdict(
+        self, node_name, agent_id, tool_name, state, scope, verified, error=None
+    ):
+        if type(verified) is not bool:
+            raise TypeError("verifier must return a boolean")
+        self.tracer.record_verification(
+            node_name=node_name,
+            agent_id=agent_id,
+            tool_name=tool_name,
+            state=state,
+            verified=verified,
+            authority_scope=scope,
+            metadata=(
+                {"status": "error", "error_type": type(error).__name__}
+                if error
+                else {"status": "checked"}
+            ),
+        )
 
 
 class _NullContext:
