@@ -1,15 +1,26 @@
 # jep-langgraph-adapter
 
-JEP runtime adapter for LangGraph: replayable delegation and verifiable AI accountability semantics.
+Execution observation, delegation records, and replay archives for LangGraph-style nodes.
 
-This package instruments LangGraph-style node callables without modifying LangGraph core. Wrapped node execution naturally emits a deterministic, hash-linked JEP accountability chain containing:
+This package instruments node callables without modifying LangGraph core. It writes local hash-linked execution records using these instrumentation mappings:
 
-- Judgment Event
-- Delegation Event
-- Termination Event
-- Verification Event
+- **Judgment** for node invocation.
+- **Delegation** for nodes configured as delegations or explicitly recorded delegation.
+- **Termination** for completion, failure, or cancellation.
+- **Verification** when a configured application verifier is invoked. Successful execution without a verifier is marked `unchecked` and does not generate a V event.
 
 Each event records `node_name`, `agent_id`, `tool_name`, `state_transition`, `authority_scope`, and `previous_event_hash`.
+
+## Event format and verification scope
+
+This package emits **local runtime envelopes**, not signed [JEP-Core v0.6](https://github.com/hjs-spec/jep-v06) wire events. Its node metadata, event labels, and hash serialization belong to the adapter. It does not produce detached-JWS signatures or perform Core signature and key-trust validation; Core interoperability requires a separately specified mapping and signing implementation.
+
+Keep two checks distinct:
+
+- **Archive replay** checks the supplied records' hashes, sequence, and links.
+- **Application verification** records the result of a configured boolean verifier. Its meaning depends on what that callback checks.
+
+A structurally valid archive can contain a failed application check. A V event does not by itself prove a model answer, factual claim, or authorization is correct. The declared `authority_scope` is metadata, not a permission enforcement mechanism.
 
 ## Install
 
@@ -54,7 +65,9 @@ adapter.instrument_state_graph(graph, {"plan": plan, "answer": answer})
 jep-langgraph replay session.jsonl
 ```
 
-The replay command validates deterministic event hashes, sequence numbers, and `previous_event_hash` links.
+The replay command loads the JSONL records, validates their supplied event hashes, and checks sequence numbers and `previous_event_hash` links. Its `valid` result concerns archive consistency, not application verifier success or complete capture of execution.
+
+The writer appends records, but an unkeyed hash chain alone cannot rule out a complete rewrite or removal of a valid suffix. Detecting those changes requires an independently trusted checkpoint or other external evidence of the expected history.
 
 ## Components
 
