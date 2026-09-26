@@ -13,7 +13,7 @@ Each event records `node_name`, `agent_id`, `tool_name`, `state_transition`, `au
 
 ## Event format and verification scope
 
-This package emits **local runtime envelopes**, not signed [JEP-Core v0.6](https://github.com/hjs-spec/jep-v06) wire events. Its node metadata, event labels, and hash serialization belong to the adapter. It does not produce detached-JWS signatures or perform Core signature and key-trust validation; Core interoperability requires a separately specified mapping and signing implementation.
+This package emits **local runtime envelopes**, not signed [JEP Core 0.7](https://github.com/hjs-spec/jep-core) wire events. Its node metadata, event labels, and hash serialization belong to the adapter. It does not produce detached-JWS signatures or perform Core signature and key-trust validation; Core interoperability requires a separately specified mapping and signing implementation.
 
 Keep two checks distinct:
 
