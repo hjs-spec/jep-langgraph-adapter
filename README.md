@@ -1,5 +1,14 @@
 # jep-langgraph-adapter
 
+> **Maintenance: retired experiment — 2026-09-26.** Active feature development
+> has ended. Source history, releases, examples and existing archive readers are
+> retained for reproduction. Package names and historical formats are unchanged.
+
+The unsigned LangGraph observation format and node hooks remain available here. New signed callable recording belongs to the Agent SDK; there is no automatic old-archive conversion or full graph-hook replacement.
+
+For new signed Core integrations, use the [maintained recording and report path](https://github.com/hjs-spec/jep-agent-sdk/blob/main/docs/INTEGRATIONS.md).
+See the [repository directory](https://github.com/hjs-spec/.github/blob/main/PROJECTS.md#retired-experiments) for maintenance status. No automatic archive migration is provided.
+
 Execution observation, delegation records, and replay archives for LangGraph-style nodes.
 
 This package instruments node callables without modifying LangGraph core. It writes local hash-linked execution records using these instrumentation mappings:
